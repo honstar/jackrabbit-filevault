@@ -26,7 +26,9 @@ import org.apache.jackrabbit.vault.packaging.JcrPackage;
 import org.apache.jackrabbit.vault.packaging.PackageException;
 import org.junit.Test;
 
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Tests that covers sub packages. the package "my_packages:subtest" contains 2 sub packages
@@ -208,6 +210,25 @@ public class TestSubPackages extends IntegrationTestBase {
     }
 
     /**
+     * Tests if non-recursive extraction clears the installed state (JCRVLT-114)
+     */
+    @Test
+    public void testNonRecursiveClearsInstalledState() throws RepositoryException, IOException, PackageException {
+        JcrPackage packNewer = packMgr.upload(getStream("testpackages/subtest_extract_contains_newer_version.zip"), false);
+        assertNotNull(packNewer);
+
+        // extract the sub packages, but don't install them.
+        ImportOptions opts = getDefaultOptions();
+        opts.setNonRecursive(true);
+        packNewer.install(opts);
+
+        // check for sub packages version 1.0.1 exists but not installed
+        assertNodeMissing("/tmp/a");
+        assertNodeExists("/etc/packages/my_packages/subtest_test_version-1.0.1.zip");
+        assertFalse(packMgr.open(admin.getNode("/etc/packages/my_packages/subtest_test_version-1.0.1.zip")).isInstalled());
+    }
+
+    /**
      * Uninstalls a package that contains sub packages where a snapshot of a sub package was deleted
      */
     @Test
@@ -237,5 +258,60 @@ public class TestSubPackages extends IntegrationTestBase {
 
     }
 
+    /**
+     * Installs 2 packages that contains same sub packages with different version
+     */
+    @Test
+    public void testSkipOlderVersionInstallation() throws RepositoryException, IOException, PackageException {
+        JcrPackage packNewer = packMgr.upload(getStream("testpackages/subtest_extract_contains_newer_version.zip"), false);
+        assertNotNull(packNewer);
+
+        // install package that contains newer version of the sub package first
+        ImportOptions opts = getDefaultOptions();
+        opts.setNonRecursive(false);
+        packNewer.install(opts);
+
+        // check for sub packages version 1.0.1 exists
+        assertNodeExists("/etc/packages/my_packages/subtest_test_version-1.0.1.zip");
+        assertTrue(packMgr.open(admin.getNode("/etc/packages/my_packages/subtest_test_version-1.0.1.zip")).isInstalled());
+        assertNodeExists("/tmp/b");
+
+        opts = getDefaultOptions();
+        opts.setNonRecursive(false);
+        JcrPackage packOlder = packMgr.upload(getStream("testpackages/subtest_extract_contains_older_version.zip"), false);
+        packOlder.install(opts);
+        assertNodeExists("/etc/packages/my_packages/subtest_test_version-1.0.zip");
+        assertFalse(packMgr.open(admin.getNode("/etc/packages/my_packages/subtest_test_version-1.0.zip")).isInstalled());
+        assertNodeMissing("/tmp/a");
+
+    }
+
+    /**
+     * Tests if skipping sub packages only works for installed packages
+     */
+    @Test
+    public void testNotSkipOlderVersionInstallation() throws RepositoryException, IOException, PackageException {
+        JcrPackage packNewer = packMgr.upload(getStream("testpackages/subtest_extract_contains_newer_version.zip"), false);
+        assertNotNull(packNewer);
+
+        // extract the sub packages, but don't install them.
+        ImportOptions opts = getDefaultOptions();
+        opts.setNonRecursive(true);
+        packNewer.install(opts);
+
+        // check for sub packages version 1.0.1 exists but not installed
+        assertNodeMissing("/tmp/a");
+        assertNodeExists("/etc/packages/my_packages/subtest_test_version-1.0.1.zip");
+        assertFalse(packMgr.open(admin.getNode("/etc/packages/my_packages/subtest_test_version-1.0.1.zip")).isInstalled());
+
+        opts = getDefaultOptions();
+        opts.setNonRecursive(false);
+        JcrPackage packOlder = packMgr.upload(getStream("testpackages/subtest_extract_contains_older_version.zip"), false);
+        packOlder.install(opts);
+        assertNodeExists("/etc/packages/my_packages/subtest_test_version-1.0.zip");
+        assertTrue(packMgr.open(admin.getNode("/etc/packages/my_packages/subtest_test_version-1.0.zip")).isInstalled());
+        assertNodeExists("/tmp/a");
+
+    }
 
 }

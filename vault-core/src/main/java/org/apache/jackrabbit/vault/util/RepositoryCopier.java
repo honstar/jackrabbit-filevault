@@ -423,7 +423,12 @@ public class RepositoryCopier {
                 // remove obsolete properties
                 for (String pName: names) {
                     try {
-                        dst.getProperty(pName).remove();
+                        // ignore protected. should not happen, unless the primary node type changes.
+                        Property dstP = dst.getProperty(pName);
+                        if (dstP.getDefinition().isProtected()) {
+                            continue;
+                        }
+                        dstP.remove();
                     } catch (RepositoryException e) {
                         // ignore
                     }
@@ -579,7 +584,7 @@ public class RepositoryCopier {
                 if (mapped.equals(prefix)) {
                     return name;
                 } else {
-                    return mapped + prefix.substring(idx);
+                    return mapped + name.substring(idx);
                 }
             }
         } catch (RepositoryException e) {

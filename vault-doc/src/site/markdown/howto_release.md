@@ -44,7 +44,8 @@ Release management tasks
     details. Make sure you have added the pgp key information in you maven settings file, especially if you have 
     more than one key installed locally. See [Appendix B](#B) for the details.
     
-    1. Execute `mvn release:prepare`. This will update the POM files and tag the release in svn.
+    0. (optional, prepare your environment. e.g.: `$ export version=3.1.12`)
+    1. Execute `mvn release:prepare -DreleaseVersion=$version`. This will update the POM files and tag the release in svn.
     2. Execute `mvn release:perform -Papache-release`. This will build the tagged release and deploy the artifacts to
         a new staging repository on _repository.apache.org_. 
         After the build, login to [https://repository.apache.org/][2] and you should see it there.
@@ -65,38 +66,44 @@ Release management tasks
 
 7. If the vote fails (easy case first):
     1. remove the release tag from svn
-    2. delete the RC from _dist_apache.org_
+
+       ````
+       svn rm https://svn.apache.org/repos/asf/jackrabbit/commons/filevault/tags/jackrabbit-filevault-$version
+       ````
+
+    2. delete the RC from _dist.apache.org_
     3. and drop the staged repository
     4. done 
  
-8. If the vote is successful
-    1. close the vote by publishing the results
-    2. copy the release candidate from `dev/jackrabbit` to `release/jackrabbit` in 
+8. If the vote is successful, close the vote by publishing the results
 
-        https://dist.apche.org/repos/dist/, and delete any older releases from the same branch 
-        (they're automatically archived),
+9. copy the release candidate from `dev/jackrabbit` to `release/jackrabbit` in 
+   https://dist.apche.org/repos/dist/, and delete any older releases from the same branch 
+   (they're automatically archived):
+
+    ```` 
+    svn move -m "Apache Jackrabbit Filevault $version" \
+        https://dist.apache.org/repos/dist/dev/jackrabbit/filevault/$version \
+        https://dist.apache.org/repos/dist/release/jackrabbit/filevault/$version
+    ````
+
+10. release the [staged repository][2] for synchronization to Maven central.
+
+11. mark the version as released in [Jira][3]:
+    _Jira Project Home_ -> _Project Summary_ -> _Administer Project_. 
         
-            svn move -m "Apache Jackrabbit Filevault $version" \
-                https://dist.apache.org/repos/dist/dev/jackrabbit/filevault/$version \
-                https://dist.apache.org/repos/dist/release/jackrabbit/filevault/$version
+    Under Versions, you'll see all the defined project versions. 
+    From the settings menu, choose *Release* on the version.
 
-    3. release the [staged repository][2] for synchronization to Maven central.
-
-    4. mark the version as released in [Jira][3]:
-        _Jira Project Home_ -> _Project Summary_ -> _Administer Project_. 
+12. Close all the issues included in the release: 
+    _Jira Project Home_ -> _Change Log_ -> Choose the released version. 
         
-        Under Versions, you'll see all the defined project versions. 
-        From the settings menu, choose *Release* on the version.
+    From the issue list you have the option to bulk update all of the included issues. 
+    Just *Transition Issues* from *Resolved* to *Closed* and you are done!
 
-    5. Close all the issues included in the release: 
-        _Jira Project Home_ -> _Change Log_ -> Choose the released version. 
-        
-        From the issue list you have the option to bulk update all of the included issues. 
-        Just *Transition Issues* from *Resolved* to *Closed* and you are done!
+13. Update the Jackrabbit web site to point to the new release.
 
-9. Update the Jackrabbit web site to point to the new release.
-
-10. Send the release announcement **once** the web site and download mirrors have been synced.
+14. Send the release announcement **once** the web site and download mirrors have been synced.
 
 
 Related Links

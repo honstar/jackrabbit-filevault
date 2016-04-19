@@ -158,14 +158,31 @@ public class JackrabbitACLImporter implements DocViewAdapter {
         }
     }
 
-    public void close() throws SAXException {
+    public List<String> close() throws SAXException {
         if (states.peek() != State.INITIAL) {
             log.error("Unexpected end state: {}", states.peek());
         }
+        List<String> paths = new ArrayList<String>();
         try {
             apply();
+
+            // currently cheat a little here
+            if (accessControlledPath == null) {
+                addPathIfExists(paths, "/rep:repoPolicy");
+            } else if ("/".equals(accessControlledPath)) {
+                addPathIfExists(paths, "/rep:policy");
+            } else {
+                addPathIfExists(paths, accessControlledPath + "/rep:policy");
+            }
         } catch (RepositoryException e) {
             log.error("Error while applying access control content.", e);
+        }
+        return paths;
+    }
+
+    private void addPathIfExists(List<String> paths, String path) throws RepositoryException {
+        if (session.nodeExists(path)) {
+            paths.add(path);
         }
     }
 
@@ -203,6 +220,18 @@ public class JackrabbitACLImporter implements DocViewAdapter {
         if (acl == null) {
             throw new RepositoryException("not JackrabbitAccessControlList applicable on " +
                     (accessControlledPath == null ? "'root'" : accessControlledPath));
+        }
+
+        // clear all ACEs of the package principals for merge (VLT-94), otherwise the `acl.addEntry()` below
+        // might just combine the privileges.
+        if (aclHandling == AccessControlHandling.MERGE) {
+            for (String name: aceMap.keySet()) {
+                for (AccessControlEntry ace : acl.getAccessControlEntries()) {
+                    if (ace.getPrincipal().getName().equals(name)) {
+                        acl.removeAccessControlEntry(ace);
+                    }
+                }
+            }
         }
 
         // apply ACEs of package

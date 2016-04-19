@@ -20,15 +20,22 @@ package org.apache.jackrabbit.vault.packaging.integration;
 import java.io.File;
 import java.io.IOException;
 
+import javax.jcr.Binary;
 import javax.jcr.NodeIterator;
+import javax.jcr.Property;
+import javax.jcr.PropertyType;
 import javax.jcr.RepositoryException;
 
 import org.apache.commons.io.FileUtils;
+import org.apache.derby.impl.load.Import;
+import org.apache.jackrabbit.vault.fs.api.ProgressTrackerListener;
+import org.apache.jackrabbit.vault.fs.io.ImportOptions;
 import org.apache.jackrabbit.vault.packaging.InstallContext;
 import org.apache.jackrabbit.vault.packaging.JcrPackage;
 import org.apache.jackrabbit.vault.packaging.PackageException;
 import org.apache.jackrabbit.vault.packaging.PackageId;
 import org.apache.tika.io.IOUtils;
+import org.junit.Ignore;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -55,6 +62,20 @@ public class TestPackageInstall extends IntegrationTestBase {
 
         // todo: check definition props
 
+    }
+
+    /**
+     * Test if rewrap of a small package works
+     */
+    @Test
+    public void testRewrap() throws RepositoryException, IOException, PackageException {
+        JcrPackage pack = packMgr.upload(getStream("testpackages/tmp.zip"), false);
+        assertNotNull(pack);
+
+        ImportOptions opts = getDefaultOptions();
+        pack.install(opts);
+
+        packMgr.rewrap(pack, opts.getListener());
     }
 
     /**
@@ -127,7 +148,7 @@ public class TestPackageInstall extends IntegrationTestBase {
 
         // just extract - no snapshots
         pack.extract(getDefaultOptions());
-        assertNodeExists("/etc/designs/agadobe/images/backgroundImage.png/jcr:content/dam:thumbnails/dam:thumbnail_48.png");
+        assertNodeExists("/etc/designs/apache/images/backgroundImage.png/jcr:content/dam:thumbnails/dam:thumbnail_48.png");
     }
 
     /**
@@ -290,9 +311,154 @@ public class TestPackageInstall extends IntegrationTestBase {
         assertEquals("child order", "jcr:content,toolbar,products,services,company,events,support,community,blog,", names.toString());
     }
 
+    /**
+     * Installs a package that and checks if snapshot is created
+     */
+    @Test
+    public void testSnapshotExists() throws RepositoryException, IOException, PackageException {
+        JcrPackage pack = packMgr.upload(getStream("testpackages/tmp.zip"), false);
+        assertNotNull(pack);
+        pack.install(getDefaultOptions());
+
+        assertNodeExists("/etc/packages/my_packages/.snapshot/tmp.zip");
+        assertNodeExists("/tmp/foo/bar/tobi");
+    }
+
+    /**
+     * Installs and uninstalls a package that and checks if the content is reverted.
+     */
+    @Test
+    public void testUninstall() throws RepositoryException, IOException, PackageException {
+        JcrPackage pack = packMgr.upload(getStream("testpackages/tmp.zip"), false);
+        assertNotNull(pack);
+        pack.install(getDefaultOptions());
+        assertNodeExists("/tmp/foo/bar/tobi");
+
+        pack.uninstall(getDefaultOptions());
+        assertNodeMissing("/tmp/foo/bar/tobi");
+    }
+
+    /**
+     * Uninstalls a package that has no snapshot (JCRVLT-89)
+     */
+    @Test
+    public void testUninstallNoSnapshot() throws RepositoryException, IOException, PackageException {
+        JcrPackage pack = packMgr.upload(getStream("testpackages/tmp.zip"), false);
+        assertNotNull(pack);
+
+        // extract should not generate snapshots
+        pack.extract(getDefaultOptions());
+        assertNodeExists("/tmp/foo/bar/tobi");
+        assertNodeMissing("/etc/packages/my_packages/.snapshot/tmp.zip");
+
+        pack.uninstall(getDefaultOptions());
+        assertNodeExists("/tmp/foo/bar/tobi");
+    }
+
+    /**
+     * Checks if uninstalling a package in strict mode with no snapshot fails (JCRVLT-89).
+     */
+    @Test
+    public void testUninstallNoSnapshotStrict() throws RepositoryException, IOException, PackageException {
+        JcrPackage pack = packMgr.upload(getStream("testpackages/tmp.zip"), false);
+        assertNotNull(pack);
+
+        // extract should not generate snapshots
+        pack.extract(getDefaultOptions());
+        assertNodeExists("/tmp/foo/bar/tobi");
+        assertNodeMissing("/etc/packages/my_packages/.snapshot/tmp.zip");
+
+        ImportOptions opts = getDefaultOptions();
+        opts.setStrict(true);
+        try {
+            pack.uninstall(opts);
+            fail("uninstalling a package with no snapshot should fail in strict mode.");
+        } catch (PackageException e) {
+            // ok
+        }
+    }
+
+    /**
+     * Installs a binary properties.
+     */
+    @Test
+    public void testBinaryProperties() throws RepositoryException, IOException, PackageException {
+        JcrPackage pack = packMgr.upload(getStream("testpackages/tmp_binary.zip"), false);
+        assertNotNull(pack);
+        pack.install(getDefaultOptions());
+
+        Property p = admin.getProperty("/tmp/binary/test/jcr:data");
+        assertEquals(PropertyType.BINARY, p.getType());
+
+        StringBuilder buffer = new StringBuilder(8192);
+        while (buffer.length() < 8192) {
+            buffer.append("0123456789abcdef");
+        }
+        String result = IOUtils.toString(p.getBinary().getStream());
+
+        assertEquals(buffer.toString(), result);
+    }
+
+    /**
+     * Installs a binary properties twice to check if it doesn't report an update.
+     * TODO: this is not implemented yet. see JCRVLT-110
+     */
+    @Test
+    @Ignore
+    public void testBinaryPropertyTwice() throws RepositoryException, IOException, PackageException {
+        JcrPackage pack = packMgr.upload(getStream("testpackages/tmp_binary.zip"), false);
+        assertNotNull(pack);
+        pack.install(getDefaultOptions());
+
+        Property p = admin.getProperty("/tmp/binary/test/jcr:data");
+        assertEquals(PropertyType.BINARY, p.getType());
+
+        StringBuilder buffer = new StringBuilder(8192);
+        while (buffer.length() < 8192) {
+            buffer.append("0123456789abcdef");
+        }
+        String result = IOUtils.toString(p.getBinary().getStream());
+
+        assertEquals(buffer.toString(), result);
+
+        // install again to check if binary data is not updated
+        ImportOptions opts = getDefaultOptions();
+        TrackingListener listener = new TrackingListener(opts.getListener());
+        opts.setListener(listener);
+
+        pack.install(opts);
+
+        //TODO: assertEquals("-", listener.getActions().get("/tmp/binary/test"));
+        assertEquals("U", listener.getActions().get("/tmp/binary/test"));
+    }
+
+    /**
+     * Installs a package with a different node type
+     */
+    @Test
+    public void testNodeTypeChange() throws RepositoryException, IOException, PackageException {
+        JcrPackage pack = packMgr.upload(getStream("testpackages/tmp.zip"), false);
+        assertNotNull(pack);
+        assertNodeExists("/etc/packages/my_packages/tmp.zip");
+
+        ImportOptions opts = getDefaultOptions();
+        pack.install(opts);
+
+        assertNodeExists("/tmp/foo");
+        assertEquals(admin.getNode("/tmp").getPrimaryNodeType().getName(), "sling:OrderedFolder");
+
+        pack = packMgr.upload(getStream("testpackages/tmp_nt_folder.zip"), false);
+        assertNotNull(pack);
+        assertNodeExists("/etc/packages/my_packages/tmp.zip");
+
+        pack.install(opts);
+
+        assertNodeExists("/tmp/foo");
+        assertEquals(admin.getNode("/tmp").getPrimaryNodeType().getName(), "nt:folder");
+    }
+
+
     // todo: upload with version
-    // todo: install / uninstall
-    // todo: sub packages
     // todo: rename
 
 }

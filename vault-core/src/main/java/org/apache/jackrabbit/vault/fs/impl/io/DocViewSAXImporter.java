@@ -306,7 +306,7 @@ public class DocViewSAXImporter extends RejectingEntityDefaultHandler implements
     }
 
     private boolean isIncluded(Item item, int depth) throws RepositoryException {
-        String path = item.getPath();
+        String path = importInfo.getRemapped().map(item.getPath());
         return wspFilter.contains(path) && (depth == 0 || filter.contains(item, path, depth));
     }
 
@@ -622,50 +622,18 @@ public class DocViewSAXImporter extends RejectingEntityDefaultHandler implements
                                     if (node.getDepth() == 0) {
                                         stack.adapter = new JackrabbitACLImporter(session, aclHandling);
                                         stack.adapter.startNode(ni);
-                                        importInfo.onCreated(node.getPath() + "/" + ni.name);
                                     } else {
                                         log.info("ignoring invalid location for repository level ACL: {}", node.getPath());
                                     }
                                 } else {
                                     stack.adapter = new JackrabbitACLImporter(node, aclHandling);
                                     stack.adapter.startNode(ni);
-                                    importInfo.onCreated(node.getPath() + "/" + ni.name);
                                 }
                             } else {
                                 stack = stack.push();
                             }
                         } else if (userManagement != null && userManagement.isAuthorizableNodeType(ni.primary)) {
-                            boolean skip = false;
-                            String id = org.apache.jackrabbit.util.Text.unescapeIllegalJcrChars(ni.name);
-                            String oldPath = node.getPath() + "/" + ni.name;
-                            if (wspFilter.getImportMode(oldPath) == ImportMode.MERGE) {
-                                String existingPath = userManagement.getAuthorizablePath(this.session, id);
-                                if (existingPath != null) {
-                                    // if existing path is not the same as this, we need to register this so that further
-                                    // nodes down the line (i.e. profiles, policies) are imported at the correct location
-                                    if (!oldPath.equals(existingPath)) {
-                                        importInfo.onRemapped(oldPath, existingPath);
-                                    }
-                                    skip = true;
-
-                                    // remember desired memberships. todo: how to deal with multi-node memberships?
-                                    DocViewProperty prop = ni.props.get("rep:members");
-                                    if (prop != null) {
-                                        importInfo.registerMemberships(id, prop.values);
-                                    }
-                                }
-                            }
-                            if (skip) {
-                                log.info("Skipping import of existing authorizable '{}' due to MERGE import mode.", id);
-                                stack = stack.push();
-                                importInfo.onNop(node.getPath() + "/" + ni.name);
-                            } else {
-                                log.debug("Authorizable element detected. starting sysview transformation {}/{}", node.getPath(), name);
-                                stack = stack.push();
-                                stack.adapter = new JcrSysViewTransformer(node);
-                                stack.adapter.startNode(ni);
-                                importInfo.onCreated(node.getPath() + "/" + ni.name);
-                            }
+                            handleAuthorizable(node, ni);
                         } else {
                             stack = stack.push(addNode(ni));
                         }
@@ -686,6 +654,105 @@ public class DocViewSAXImporter extends RejectingEntityDefaultHandler implements
         }
     }
 
+    /**
+     * Handle an authorizable node
+     * @param node the parent node
+     * @param ni doc view node of the authorizable
+     * @throws RepositoryException
+     * @throws SAXException
+     */
+    private void handleAuthorizable(Node node, DocViewNode ni) throws RepositoryException, SAXException {
+        String id = userManagement.getAuthorizableId(ni);
+        String newPath = node.getPath() + "/" + ni.name;
+        boolean isIncluded = wspFilter.contains(newPath);
+        String oldPath = userManagement.getAuthorizablePath(this.session, id);
+        if (oldPath == null) {
+            if (!isIncluded) {
+                log.debug("auto-creating authorizable node not in filter {}", newPath);
+            }
+
+            // just import the authorizable node
+            log.debug("Authorizable element detected. starting sysview transformation {}", newPath);
+            stack = stack.push();
+            stack.adapter = new JcrSysViewTransformer(node);
+            stack.adapter.startNode(ni);
+            importInfo.onCreated(newPath);
+            return;
+        }
+
+        Node authNode = session.getNode(oldPath);
+        ImportMode mode = wspFilter.getImportMode(newPath);
+
+        // if existing path is not the same as this, we need to register this so that further
+        // nodes down the line (i.e. profiles, policies) are imported at the correct location
+        // we only follow existing authorizables for non-REPLACE mode and if ignoring this authorizable node
+        // todo: check if this also works cross-aggregates
+        if (mode != ImportMode.REPLACE || !isIncluded) {
+            importInfo.onRemapped(oldPath, newPath);
+        }
+
+        if (!isIncluded) {
+            // skip authorizable handling - always follow existing authorizable - regardless of mode
+            // todo: we also need to check any rep:Memberlist subnodes. see JCRVLT-69
+            stack = stack.push(new StackElement(authNode, false));
+            importInfo.onNop(oldPath);
+            return;
+        }
+
+        switch (mode) {
+            case MERGE:
+                // remember desired memberships.
+                // todo: how to deal with multi-node memberships? see JCRVLT-69
+                DocViewProperty prop = ni.props.get("rep:members");
+                if (prop != null) {
+                    importInfo.registerMemberships(id, prop.values);
+                }
+
+                log.info("Skipping import of existing authorizable '{}' due to MERGE import mode.", id);
+                stack = stack.push(new StackElement(authNode, false));
+                importInfo.onNop(newPath);
+                break;
+
+            case REPLACE:
+                // just replace the entire subtree for now.
+                log.debug("Authorizable element detected. starting sysview transformation {}", newPath);
+                stack = stack.push();
+                stack.adapter = new JcrSysViewTransformer(node);
+                stack.adapter.startNode(ni);
+                importInfo.onReplaced(newPath);
+                break;
+
+            case UPDATE:
+                log.debug("Authorizable element detected. starting sysview transformation {}", newPath);
+                stack = stack.push();
+                stack.adapter = new JcrSysViewTransformer(node, oldPath);
+                // we need to tweak the ni.name so that the sysview import does not
+                // rename the authorizable node name
+                String newName = Text.getName(oldPath);
+                DocViewNode mapped = new DocViewNode(
+                        newName,
+                        newName,
+                        ni.uuid,
+                        ni.props,
+                        ni.mixins,
+                        ni.primary
+                );
+                // but we need to be augment with a potential rep:authorizableId
+                if (authNode.hasProperty("rep:authorizableId")) {
+                    DocViewProperty authId = new DocViewProperty(
+                            "rep:authorizableId",
+                            new String[]{authNode.getProperty("rep:authorizableId").getString()},
+                            false,
+                            PropertyType.STRING
+                    );
+                    mapped.props.put(authId.name, authId);
+                }
+                stack.adapter.startNode(mapped);
+                importInfo.onReplaced(newPath);
+                break;
+        }
+    }
+
     private StackElement addNode(DocViewNode ni) throws RepositoryException, IOException {
         final Node currentNode = stack.getNode();
 
@@ -698,11 +765,6 @@ public class DocViewSAXImporter extends RejectingEntityDefaultHandler implements
         } else if (ni.uuid == null) {
             if (stack.checkForNode() && currentNode.hasNode(ni.label)) {
                 node = currentNode.getNode(ni.label);
-                if (ni.primary != null && !node.getPrimaryNodeType().getName().equals(ni.primary)) {
-                    // if node type mismatches => replace
-                    oldNode = node;
-                    node = null;
-                }
             }
         } else {
             try {
@@ -725,20 +787,9 @@ public class DocViewSAXImporter extends RejectingEntityDefaultHandler implements
             if (node == null) {
                 if (stack.checkForNode() && currentNode.hasNode(ni.label)) {
                     node = currentNode.getNode(ni.label);
-                    if (ni.primary != null && !node.getPrimaryNodeType().getName().equals(ni.primary)) {
-                        // if node type mismatches => replace
-                        oldNode = node;
-                        node = null;
-                    }
                 }
             } else {
-                if (node.getName().equals(ni.name)) {
-                    if (ni.primary != null && !node.getPrimaryNodeType().getName().equals(ni.primary)) {
-                        // if node type mismatches => replace
-                        oldNode = node;
-                        node = null;
-                    }
-                } else {
+                if (!node.getName().equals(ni.name)) {
                     // if names mismatches => replace
                     oldNode = node;
                     node = null;
@@ -756,25 +807,9 @@ public class DocViewSAXImporter extends RejectingEntityDefaultHandler implements
             // check versionable
             new VersioningState(stack, oldNode).ensureCheckedOut();
 
-            // replace node
-            Node tmpNode = null;
-            try {
-                // if old node exist, try to 'save' the child nodes
-                NodeIterator iter = oldNode.getNodes();
-                while (iter.hasNext()) {
-                    Node child = iter.nextNode();
-                    if (tmpNode == null) {
-                        tmpNode = session.getRootNode().addNode("tmp" + System.currentTimeMillis(), JcrConstants.NT_UNSTRUCTURED);
-                    }
-                    try {
-                        session.move(child.getPath(), tmpNode.getPath() + "/" + child.getName());
-                    } catch (RepositoryException e) {
-                        log.error("Error while moving child node to temporary location. Child will be removed.", e);
-                    }
-                }
-            } catch (RepositoryException e) {
-                log.warn("error while moving child nodes (ignored)", e);
-            }
+            ChildNodeStash recovery = new ChildNodeStash(session);
+            recovery.stashChildren(oldNode);
+
             // ensure that existing binaries are not sourced from a property
             // that is about to be removed
             Map<String, DocViewSAXImporter.BlobInfo> blobs = binaries.get(oldNode.getPath());
@@ -788,26 +823,9 @@ public class DocViewSAXImporter extends RejectingEntityDefaultHandler implements
             // now create the new node
             node = createNode(currentNode, ni);
 
-            // move the old child nodes back
-            if (tmpNode != null) {
-                NodeIterator iter = tmpNode.getNodes();
-                boolean hasErrors = false;
-                while (iter.hasNext()) {
-                    Node child = iter.nextNode();
-                    String newPath = node.getPath() + "/" + child.getName();
-                    try {
-                        session.move(child.getPath(), newPath);
-                    } catch (RepositoryException e) {
-                        log.warn("Unable to move child back to new location at {} due to: {}. Node will remain in temporary location: {}",
-                                new Object[]{newPath, e.getMessage(), child.getPath()});
-                        importInfo.onError(newPath, e);
-                        hasErrors = true;
-                    }
-                }
-                if (!hasErrors) {
-                    tmpNode.remove();
-                }
-            }
+            // move the children back
+            recovery.recoverChildren(node, importInfo);
+
             importInfo.onReplaced(node.getPath());
             return new StackElement(node, false);
         }
@@ -846,6 +864,11 @@ public class DocViewSAXImporter extends RejectingEntityDefaultHandler implements
                 importInfo.registerToVersion(node.getPath());
             }
             VersioningState vs = new VersioningState(stack, node);
+
+            // set new primary type (but never set rep:root)
+            if (!"rep:root".equals(ni.primary)) {
+                node.setPrimaryType(ni.primary);
+            }
 
             // remove the 'system' properties from the set
             ni.props.remove(JcrConstants.JCR_PRIMARYTYPE);
@@ -1075,7 +1098,10 @@ public class DocViewSAXImporter extends RejectingEntityDefaultHandler implements
                 }
                 // close transformer if last in stack
                 if (stack.adapter != null) {
-                    stack.adapter.close();
+                    List<String> createdPaths = stack.adapter.close();
+                    for (String createdPath: createdPaths) {
+                        importInfo.onCreated(createdPath);
+                    }
                     stack.adapter = null;
                     log.debug("Sysview transformation complete.");
                 }

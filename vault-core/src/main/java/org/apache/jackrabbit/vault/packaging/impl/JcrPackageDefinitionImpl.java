@@ -134,7 +134,7 @@ public class JcrPackageDefinitionImpl implements JcrPackageDefinition {
             int idx = path.lastIndexOf('.');
             if (idx > 0) {
                 String ext = path.substring(idx);
-                if (ext.equalsIgnoreCase(".zip") || ext.equalsIgnoreCase(".jar")) {
+                if (".zip".equalsIgnoreCase(ext) || ".jar".equalsIgnoreCase(ext)) {
                     path = path.substring(0, idx);
                 }
             }
@@ -238,7 +238,7 @@ public class JcrPackageDefinitionImpl implements JcrPackageDefinition {
     }
 
     /**
-     * Extracts the content represenatation of a definition store the given
+     * Extracts the content representation of a definition store the given
      * package to this node.
      *
      * @param packArchive the archive of the package
@@ -274,7 +274,6 @@ public class JcrPackageDefinitionImpl implements JcrPackageDefinition {
 
         try {
             Node rootNode = session.getNode(rootPath);
-            String defPath = defNode.getPath().substring(1);
 
             Importer importer = new Importer();
             // disable saving
@@ -283,7 +282,7 @@ public class JcrPackageDefinitionImpl implements JcrPackageDefinition {
             importer.run(archive, rootNode);
 
             // refresh defNode if it was replaced during unwrap
-            defNode = session.getRootNode().getNode(defPath);
+            defNode = session.getNode(rootPath);
 
             // set props again
             if (lastUnpacked != null) {

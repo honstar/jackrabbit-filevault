@@ -23,14 +23,14 @@
         <groupId>org.apache.jackrabbit.vault</groupId>
         <artifactId>parent</artifactId>
         <relativePath>../parent/pom.xml</relativePath>
-        <version>3.1.7-SNAPSHOT</version>
+        <version>3.1.27-SNAPSHOT</version>
     </parent>
 
     <!-- ====================================================================== -->
     <!-- P R O J E C T  D E S C R I P T I O N                                   -->
     <!-- ====================================================================== -->
     <artifactId>org.apache.jackrabbit.vault.rcp</artifactId>
-    <version>3.1.7-SNAPSHOT</version>
+    <version>3.1.27-SNAPSHOT</version>
     <packaging>bundle</packaging>
 
     <name>Apache Jackrabbit FileVault RCP Server Bundle</name>
@@ -80,6 +80,16 @@
                     </instructions>
                 </configuration>
             </plugin>
+            <!-- exclude test resources from rat-check -->
+            <plugin>
+                <groupId>org.apache.rat</groupId>
+                <artifactId>apache-rat-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>src/test/resources/*.json</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 
@@ -90,7 +100,7 @@
         <dependency>
             <groupId>org.apache.jackrabbit.vault</groupId>
             <artifactId>org.apache.jackrabbit.vault</artifactId>
-            <version>3.1.7-SNAPSHOT</version>
+            <version>3.1.27-SNAPSHOT</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -152,7 +162,7 @@
         <dependency>
             <groupId>org.apache.jackrabbit.vault</groupId>
             <artifactId>vault-davex</artifactId>
-            <version>3.1.7-SNAPSHOT</version>
+            <version>3.1.27-SNAPSHOT</version>
             <scope>compile</scope>
         </dependency>
 

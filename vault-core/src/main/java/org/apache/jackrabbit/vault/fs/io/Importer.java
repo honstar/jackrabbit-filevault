@@ -52,6 +52,7 @@ import org.apache.jackrabbit.vault.fs.api.ArtifactType;
 import org.apache.jackrabbit.vault.fs.api.ImportInfo;
 import org.apache.jackrabbit.vault.fs.api.NodeNameList;
 import org.apache.jackrabbit.vault.fs.api.PathFilterSet;
+import org.apache.jackrabbit.vault.fs.api.PathMapping;
 import org.apache.jackrabbit.vault.fs.api.SerializationType;
 import org.apache.jackrabbit.vault.fs.api.VaultInputSource;
 import org.apache.jackrabbit.vault.fs.api.WorkspaceFilter;
@@ -224,6 +225,11 @@ public class Importer {
     private final ImportOptions opts;
 
     /**
+     * path mapping from the import options
+     */
+    private PathMapping pathMapping;
+
+    /**
      * the checkpoint state of the autosave. used for recovering from stale item errors during install.
      */
     private AutoSave cpAutosave;
@@ -355,6 +361,14 @@ public class Importer {
         }
         if (filter == null) {
             filter = new DefaultWorkspaceFilter();
+        }
+
+        // check path remapping
+        pathMapping = opts.getPathMapping();
+        if (pathMapping != null) {
+            filter = filter.translate(pathMapping);
+        } else {
+            pathMapping = PathMapping.IDENTITY;
         }
 
         // set import mode if possible
@@ -595,6 +609,20 @@ public class Importer {
                     repoName = repoName.substring(0, repoName.length() - 4);
                     repoPath = parentInfo.path + "/" + repoName;
                 }
+
+                // remap if needed
+                String mappedPath = pathMapping.map(repoPath);
+                if (!mappedPath.equals(repoPath)) {
+                    String mappedParent = Text.getRelativeParent(mappedPath, 1);
+                    if (!mappedParent.equals(parentInfo.path)) {
+                        log.warn("remapping other than renames not supported yet ({} -> {}).", repoPath, mappedPath);
+                    } else {
+                        log.info("remapping detected {} -> {}", repoPath, mappedPath);
+                        repoPath = mappedPath;
+                        repoName = Text.getName(repoPath);
+                    }
+                }
+
                 TxInfo info = parentInfo.addChild(new TxInfo(parentInfo, repoPath));
                 log.debug("Creating directory artifact for {}", repoName);
                 Artifact parent = new DirectoryArtifact(repoName);
@@ -644,6 +672,20 @@ public class Importer {
                 if (repoPath.startsWith("/etc/packages/") && (repoPath.endsWith(".jar") || repoPath.endsWith(".zip"))) {
                     subPackages.add(repoPath);
                 }
+
+                // remap if needed
+                String mappedPath = pathMapping.map(repoPath);
+                if (!mappedPath.equals(repoPath)) {
+                    String mappedParent = Text.getRelativeParent(mappedPath, 1);
+                    if (!mappedParent.equals(parentInfo.path)) {
+                        log.warn("remapping other than renames not supported yet ({} -> {}).", repoPath, mappedPath);
+                    } else {
+                        log.info("remapping detected {} -> {}", repoPath, mappedPath);
+                        repoPath = mappedPath;
+                        repoName = Text.getName(repoPath);
+                    }
+                }
+
                 String repoBase = repoName;
                 String ext = "";
                 int idx = repoName.lastIndexOf('.');
@@ -651,6 +693,7 @@ public class Importer {
                     repoBase = repoName.substring(0, idx);
                     ext = repoName.substring(idx);
                 }
+
                 SerializationType serType = SerializationType.GENERIC;
                 ArtifactType type = ArtifactType.PRIMARY;
                 VaultInputSource is = archive.getInputSource(file);
@@ -788,9 +831,12 @@ public class Importer {
                 processedInfos.clear();
             }
 
+            // copy the children collection since children could be removed during remapping
+            List<TxInfo> children = new ArrayList<TxInfo>(info.children().values());
+
             // traverse children but skip the ones not in the skip list
             TxInfo next = skipList.isEmpty() ? null : skipList.removeFirst();
-            for (TxInfo child: info.children().values()) {
+            for (TxInfo child: children) {
                 if (next == null || next == child) {
                     commit(session, child, skipList);
                     // continue normally after lng child was found
@@ -962,12 +1008,9 @@ public class Importer {
                     }
                 }
             }
-            // check if node was remapped. currently we just skip them as it's not clear how the filter should be
-            // reapplied or what happens if the remapping links to a tree we already processed.
-            // in this case we don't descend in any children and can clear them right away
-            if (imp.getRemapped().containsKey(info.path)) {
-                info.children = null;
-            }
+            // remap the child tree in case some of the nodes where moved during import (e.g. authorizable)
+            // todo: this could be a problem during error recovery
+            info = info.remap(imp.getRemapped());
         }
         log.debug("committed {}", info.path);
         return imp;
@@ -1061,7 +1104,7 @@ public class Importer {
 
     private static class TxInfo {
 
-        private final TxInfo parent;
+        private TxInfo parent;
 
         private final String path;
 
@@ -1116,25 +1159,16 @@ public class Importer {
         }
 
         public Node getParentNode(Session s) throws RepositoryException {
-            Node root = s.getRootNode();
-            String parentPath = Text.getRelativeParent(path, 1);
-            if (parentPath.length() > 0 && !parentPath.equals("/")) {
-                parentPath = parentPath.substring(1);
-                if (root.hasNode(parentPath)) {
-                    root = root.getNode(parentPath);
-                } else {
-                    root = null;
-                }
-            }
-            return root;
+            String parentPath = emptyPathToRoot(Text.getRelativeParent(path, 1));
+            return s.nodeExists(parentPath)
+                    ? s.getNode(parentPath)
+                    : null;
         }
 
         public Node getNode(Session s) throws RepositoryException {
-            if (path.length() == 0) {
-                return s.getRootNode();
-            }
-            return s.nodeExists(path)
-                    ? s.getNode(path)
+            String p = emptyPathToRoot(path);
+            return s.nodeExists(p)
+                    ? s.getNode(p)
                     : null;
         }
 
@@ -1160,6 +1194,42 @@ public class Importer {
                 }
             }
             return root;
+        }
+
+        public TxInfo remap(PathMapping mapping) {
+            String mappedPath = mapping.map(path, true);
+            if (mappedPath.equals(path)) {
+                return this;
+            }
+
+            TxInfo ret = new TxInfo(parent, mappedPath);
+
+            // todo: what should we do with the artifacts ?
+            ret.artifacts.addAll(artifacts);
+
+            // todo: do we need to remap the namelist, too?
+            ret.nameList = nameList;
+
+            ret.isIntermediate = isIntermediate;
+
+            if (children != null) {
+                for (TxInfo child: children.values()) {
+                    child = child.remap(mapping);
+                    child.parent = this;
+                    ret.addChild(child);
+                }
+            }
+
+            // ensure that our parent links the new info
+            if (parent.children != null) {
+                parent.children.put(ret.name, ret);
+            }
+
+            return ret;
+        }
+
+        private static String emptyPathToRoot(String path) {
+            return path == null || path.length() == 0 ? "/" : path;
         }
     }
 

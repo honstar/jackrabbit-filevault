@@ -31,7 +31,7 @@
     <!-- ====================================================================== -->
     <groupId>org.apache.jackrabbit.vault</groupId>
     <artifactId>parent</artifactId>
-    <version>3.1.7-SNAPSHOT</version>
+    <version>3.1.27-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>Apache Jackrabbit FileVault (Parent Project)</name>
@@ -40,8 +40,8 @@
     </description>
 
     <properties>
-        <jackrabbit.version>2.7.4</jackrabbit.version>
-        <oak.version>0.18</oak.version>
+        <jackrabbit.version>2.11.3</jackrabbit.version>
+        <oak.version>1.3.14</oak.version>
     </properties>
 
     <!-- ====================================================================== -->
@@ -105,7 +105,7 @@
                 <plugin>
                     <groupId>org.apache.felix</groupId>
                     <artifactId>maven-scr-plugin</artifactId>
-                    <version>1.14.0</version>
+                    <version>1.19.0</version>
                     <executions>
                         <execution>
                             <id>generate-scr-scrdescriptor</id>
@@ -165,7 +165,24 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-release-plugin</artifactId>
-                    <version>2.1</version>
+                    <version>2.4.2</version>
+                </plugin>
+                <!-- ====================================================================== -->
+                <!-- R A T   P L U G I N                                                    -->
+                <!-- ====================================================================== -->
+                <plugin>
+                    <groupId>org.apache.rat</groupId>
+                    <artifactId>apache-rat-plugin</artifactId>
+                    <version>0.11</version>
+                    <configuration>
+                        <excludes>
+                            <exclude>release.properties</exclude>
+                            <exclude>.git/**</exclude>
+                            <exclude>.idea/**</exclude>
+                            <exclude>.gitignore</exclude>
+                            <exclude>derby.log</exclude>
+                        </excludes>
+                    </configuration>
                 </plugin>
                 <!-- ====================================================================== -->
                 <!-- S I T E    P L U G I N                                                 -->
@@ -304,7 +321,7 @@
             <dependency>
                 <groupId>commons-io</groupId>
                 <artifactId>commons-io</artifactId>
-                <version>1.4</version>
+                <version>2.4</version>
             </dependency>
             <dependency>
                 <groupId>commons-collections</groupId>
@@ -339,6 +356,31 @@
     <!-- P R O F I L E S                                                        -->
     <!-- ====================================================================== -->
     <profiles>
+        <profile>
+            <!-- ====================================================================== -->
+            <!-- R A T   P L U G I N                                                    -->
+            <!-- ====================================================================== -->
+            <id>rat-check</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.rat</groupId>
+                        <artifactId>apache-rat-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 
 </project>
